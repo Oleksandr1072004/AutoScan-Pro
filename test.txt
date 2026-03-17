@@ -1,0 +1,1 @@
+Hello! This is a project about auto scanning to check some disadvantages for technical condition of auto.
