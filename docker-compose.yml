@@ -1,0 +1,150 @@
+version: '3.9'
+
+services:
+  # ─────────────────────────────────────────
+  # PostgreSQL — основна база даних
+  # ─────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: autoscan-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-autoscan_db}
+      POSTGRES_USER: ${DB_USER:-autoscan_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-autoscan_pass}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-autoscan_user} -d ${DB_NAME:-autoscan_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - autoscan-network
+
+  # ─────────────────────────────────────────
+  # Node.js API — бекенд сервер
+  # ─────────────────────────────────────────
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: autoscan-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: ${API_PORT:-3000}
+      # Database
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-autoscan_db}
+      DB_USER: ${DB_USER:-autoscan_user}
+      DB_PASSWORD: ${DB_PASSWORD:-autoscan_pass}
+      # Auth
+      JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_change_in_prod}
+      # Firebase
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID}
+      FIREBASE_PRIVATE_KEY: ${FIREBASE_PRIVATE_KEY}
+      FIREBASE_CLIENT_EMAIL: ${FIREBASE_CLIENT_EMAIL}
+      # OBD-II Mock
+      MOCK_OBD_HOST: mock-obd
+      MOCK_OBD_PORT: 35000
+      MOCK_OBD_ENABLED: ${MOCK_OBD_ENABLED:-true}
+      # WebSocket
+      WS_PORT: 3001
+    ports:
+      - "${API_PORT:-3000}:3000"   # REST API
+      - "3001:3001"                  # WebSocket
+    volumes:
+      - ./backend:/app
+      - /app/node_modules            # не перезаписувати node_modules
+    command: >
+      sh -c "npx knex migrate:latest &&
+             npx knex seed:run &&
+             npm run dev"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - autoscan-network
+
+  # ─────────────────────────────────────────
+  # Mock OBD-II Server — емулятор адаптера
+  # ─────────────────────────────────────────
+  mock-obd:
+    build:
+      context: ./mock-obd
+      dockerfile: Dockerfile
+    container_name: autoscan-mock-obd
+    restart: unless-stopped
+    environment:
+      MOCK_PORT: 35000
+      # Симульовані DTC-коди (через кому)
+      MOCK_DTC_CODES: "P0301,P0420"
+      # Симульовані значення сенсорів
+      MOCK_RPM: 2450
+      MOCK_COOLANT_TEMP: 85
+      MOCK_BATTERY_VOLTAGE: 12.6
+      MOCK_SPEED: 60
+    ports:
+      - "35000:35000"
+    networks:
+      - autoscan-network
+
+  # ─────────────────────────────────────────
+  # Swagger UI — документація API
+  # ─────────────────────────────────────────
+  swagger-ui:
+    image: swaggerapi/swagger-ui:latest
+    container_name: autoscan-swagger
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      SWAGGER_JSON_URL: http://localhost:3000/api/v1/swagger.json
+      BASE_URL: /docs
+    ports:
+      - "8080:8080"
+    networks:
+      - autoscan-network
+
+  # ─────────────────────────────────────────
+  # pgAdmin — GUI для PostgreSQL (dev only)
+  # ─────────────────────────────────────────
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: autoscan-pgadmin
+    restart: unless-stopped
+    profiles:
+      - dev                          # запускається тільки з --profile dev
+    depends_on:
+      - postgres
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@autoscan.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin123}
+    ports:
+      - "5050:80"
+    networks:
+      - autoscan-network
+
+# ─────────────────────────────────────────
+# Volumes
+# ─────────────────────────────────────────
+volumes:
+  postgres_data:
+    driver: local
+
+# ─────────────────────────────────────────
+# Networks
+# ─────────────────────────────────────────
+networks:
+  autoscan-network:
+    driver: bridge
