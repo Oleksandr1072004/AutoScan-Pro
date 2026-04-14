@@ -1,0 +1,8 @@
+{
+  "event": "obd_protocol_failure",
+  "protocol": "ISO15765",
+  "adapter_id": "AA:BB:CC:DD:EE:FF",
+  "attempt": 3,
+  "duration_ms": 15234,
+  "timestamp": "2025-04-13T10:00:00Z"
+}
